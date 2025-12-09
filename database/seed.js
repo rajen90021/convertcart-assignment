@@ -16,7 +16,8 @@ async function seed() {
         connection = await mysql.createConnection({
             host: dbConfig.host,
             user: dbConfig.user,
-            password: dbConfig.password
+            password: dbConfig.password,
+            multipleStatements: true
         });
 
         await connection.query(`CREATE DATABASE IF NOT EXISTS \`${dbConfig.database}\`;`);
