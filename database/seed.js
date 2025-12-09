@@ -4,20 +4,24 @@ require("dotenv").config();
 
 async function seed() {
 
+    // SSL configuration for remote databases
+    const sslConfig = process.env.DB_SSL === 'true' ? {
+        ca: fs.readFileSync("./ca.pem")
+    } : undefined;
+
     const connection = await mysql.createConnection({
-        host: process.env.HOST,
-        port: process.env.PORT,
-        user: process.env.USER,
-        password: process.env.PASSWORD,
+        host: process.env.DB_HOST,
+        port: Number(process.env.DB_PORT),
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
         database: process.env.DB_NAME,
-        ssl: {
-            rejectUnauthorized: true,
-            ca: fs.readFileSync('./ca.pem')   // IMPORTANT
-        }
+        multipleStatements: true,   // ⭐ REQUIRED FIX ⭐
+        ssl: sslConfig
     });
 
+
     try {
-        console.log("✔ Connected to Aiven MySQL");
+
 
         // Load schema file
         const schema = fs.readFileSync("./database/schema.sql", "utf8");
@@ -104,5 +108,5 @@ async function seed() {
         await connection.end();
     }
 }
-
+module.exports = seed;
 seed();
