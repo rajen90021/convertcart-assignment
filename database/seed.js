@@ -1,43 +1,37 @@
-const mysql = require('mysql2/promise');
-require('dotenv').config();
-
-const dbConfig = {
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME || 'restaurant_db',
-    multipleStatements: true
-};
+const mysql = require("mysql2/promise");
+const fs = require("fs");
+require("dotenv").config();
 
 async function seed() {
-    let connection;
+
+    const connection = await mysql.createConnection({
+        host: process.env.HOST,
+        port: process.env.PORT,
+        user: process.env.USER,
+        password: process.env.PASSWORD,
+        database: process.env.DB_NAME,
+        ssl: {
+            rejectUnauthorized: true,
+            ca: fs.readFileSync('./ca.pem')   // IMPORTANT
+        }
+    });
+
     try {
-        // Create connection without database first to ensure it exists
-        connection = await mysql.createConnection({
-            host: dbConfig.host,
-            user: dbConfig.user,
-            password: dbConfig.password,
-            multipleStatements: true
-        });
+        console.log("✔ Connected to Aiven MySQL");
 
-        await connection.query(`CREATE DATABASE IF NOT EXISTS \`${dbConfig.database}\`;`);
-        await connection.query(`USE \`${dbConfig.database}\`;`);
-
-        console.log('Database created/selected.');
-
-        const schema = require('fs').readFileSync('./database/schema.sql', 'utf8');
+        // Load schema file
+        const schema = fs.readFileSync("./database/schema.sql", "utf8");
         await connection.query(schema);
-        console.log('Schema applied.');
+        console.log("✔ Schema applied");
 
-        // Clear existing data
-        await connection.query('SET FOREIGN_KEY_CHECKS = 0;');
-        await connection.query('TRUNCATE TABLE orders;');
-        await connection.query('TRUNCATE TABLE menu_items;');
-        await connection.query('TRUNCATE TABLE restaurants;');
-        await connection.query('SET FOREIGN_KEY_CHECKS = 1;');
+        // Delete old data
+        await connection.query("DELETE FROM orders;");
+        await connection.query("DELETE FROM menu_items;");
+        await connection.query("DELETE FROM restaurants;");
+        console.log("✔ Old data cleared");
 
         // Insert Restaurants
-        const [resParams] = await connection.query(`
+        await connection.query(`
             INSERT INTO restaurants (name, city) VALUES 
             ('Hyderabadi Spice House', 'Hyderabad'),
             ('Mumbai Flavors', 'Mumbai'),
@@ -45,13 +39,15 @@ async function seed() {
             ('Bangalore Bites', 'Bangalore'),
             ('Chennai Kitchen', 'Chennai')
         `);
-        console.log('Restaurants inserted.');
+        console.log("✔ Restaurants inserted");
 
-        // Get Restaurant IDs (assuming auto-increment starts at 1, but fetching is safer)
-        const [restaurants] = await connection.query('SELECT id, name FROM restaurants');
-        const rMap = restaurants.reduce((acc, r) => { acc[r.name] = r.id; return acc; }, {});
+        const [restaurants] = await connection.query("SELECT id, name FROM restaurants");
+        const rMap = restaurants.reduce((acc, r) => {
+            acc[r.name] = r.id;
+            return acc;
+        }, {});
 
-        // Insert Menu Items
+        // Insert menu_items
         const menuItemsData = [
             { r: 'Hyderabadi Spice House', n: 'Chicken Biryani', p: 220 },
             { r: 'Hyderabadi Spice House', n: 'Mutton Biryani', p: 350 },
@@ -64,25 +60,24 @@ async function seed() {
         ];
 
         for (const item of menuItemsData) {
-            await connection.query('INSERT INTO menu_items (restaurant_id, name, price) VALUES (?, ?, ?)',
-                [rMap[item.r], item.n, item.p]);
+            await connection.query(
+                "INSERT INTO menu_items (restaurant_id, name, price) VALUES (?, ?, ?)",
+                [rMap[item.r], item.n, item.p]
+            );
         }
-        console.log('Menu Items inserted.');
+        console.log("✔ Menu items inserted");
 
-        // Fetch Menu Items to seed orders
-        const [menuItems] = await connection.query('SELECT id, name, restaurant_id FROM menu_items');
+        const [menuItems] = await connection.query("SELECT id, name, restaurant_id FROM menu_items");
 
-        // Insert Orders (random counts to simulate popularity)
-        // High orders for Hyderabadi Spice House - Chicken Biryani
+        // Insert orders
         const ordersValues = [];
 
         const addOrders = (itemName, restaurantName, count) => {
             const rId = rMap[restaurantName];
             const item = menuItems.find(m => m.name === itemName && m.restaurant_id === rId);
-            if (item) {
-                for (let i = 0; i < count; i++) {
-                    ordersValues.push([item.id]);
-                }
+            if (!item) return;
+            for (let i = 0; i < count; i++) {
+                ordersValues.push([item.id]);
             }
         };
 
@@ -94,20 +89,19 @@ async function seed() {
         addOrders('Mutton Biryani', 'Hyderabadi Spice House', 50);
 
         if (ordersValues.length > 0) {
-            // Insert in batches to avoid query size limits if it were huge, but here it's fine
-            const placeholder = ordersValues.map(() => '(?)').join(',');
-            const flatValues = ordersValues.flat();
-            // Constructing query manually for bulk insert
-            await connection.query(`INSERT INTO orders (menu_item_id) VALUES ${placeholder}`, flatValues);
+            await connection.query(
+                `INSERT INTO orders (menu_item_id) VALUES ${ordersValues.map(() => "(?)").join(",")}`,
+                ordersValues.flat()
+            );
         }
 
-        console.log(`Seeded ${ordersValues.length} orders.`);
-        console.log('Seeding completed successfully.');
+        console.log(`✔ Seeded ${ordersValues.length} orders`);
+        console.log("🎉 Seeding completed");
 
     } catch (err) {
-        console.error('Seeding failed:', err);
+        console.error("❌ Seeding failed:", err);
     } finally {
-        if (connection) await connection.end();
+        await connection.end();
     }
 }
 
